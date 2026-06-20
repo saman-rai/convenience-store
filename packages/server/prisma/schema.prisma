@@ -1,0 +1,311 @@
+// To switch to PostgreSQL in production:
+//   datasource db {
+//     provider = "postgresql"
+//     url      = env("DATABASE_URL")
+//   }
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Auth & Users ───────────────────────────────────────────────
+
+enum Role {
+  OWNER
+  MANAGER
+  CASHIER
+  INVENTORY_CLERK
+}
+
+model User {
+  id           Int       @id @default(autoincrement())
+  name         String
+  email        String    @unique
+  phone        String?
+  passwordHash String
+  role         Role      @default(CASHIER)
+  storeId      Int?
+  store        Store?    @relation(fields: [storeId], references: [id])
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // Relations
+  cashierTransactions Transaction[] @relation("cashier")
+  stockMovements      StockMovement[]
+  shifts              Shift[]
+  purchaseOrders      PurchaseOrder[]     @relation("purchaseOrderCreator")
+}
+
+// ─── Store ──────────────────────────────────────────────────────
+
+model Store {
+  id        Int      @id @default(autoincrement())
+  name      String
+  address   String?
+  phone     String?
+  taxRate   Float    @default(13.0)
+  currency  String   @default("NPR")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users     User[]
+  stock     Stock[]
+  stockMovements StockMovement[]
+  customers Customer[]
+  transactions Transaction[]
+  shifts    Shift[]
+  expenses  Expense[]
+  purchaseOrders PurchaseOrder[]
+}
+
+// ─── Categories & Brands ────────────────────────────────────────
+
+model Category {
+  id        Int        @id @default(autoincrement())
+  nameEn    String
+  nameNe    String?    // Nepali name (Devanagari)
+  parentId  Int?
+  parent    Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children  Category[] @relation("CategoryHierarchy")
+  isActive  Boolean    @default(true)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  products Product[]
+}
+
+model Brand {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products Product[]
+}
+
+// ─── Products ───────────────────────────────────────────────────
+
+model Product {
+  id          Int      @id @default(autoincrement())
+  barcode     String   @unique
+  nameEn      String
+  nameNe      String?
+  sku         String?  @unique
+  categoryId  Int?
+  category    Category? @relation(fields: [categoryId], references: [id])
+  brandId     Int?
+  brand       Brand?   @relation(fields: [brandId], references: [id])
+  unit        String   @default("pcs") // pcs, kg, L, pack
+  price       Float    // selling price
+  costPrice   Float?   // cost price for P&L
+  taxRate     Float    @default(13.0)  // Nepal VAT
+  minStock    Int      @default(0)     // low stock threshold
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  stockRecords    Stock[]
+  stockMovements  StockMovement[]
+  purchaseItems   PurchaseOrderItem[]
+  transactionItems TransactionItem[]
+}
+
+// ─── Stock / Inventory ──────────────────────────────────────────
+
+model Stock {
+  id         Int      @id @default(autoincrement())
+  productId  Int
+  product    Product  @relation(fields: [productId], references: [id])
+  storeId    Int
+  store      Store    @relation(fields: [storeId], references: [id])
+  quantity   Float    @default(0)
+  expiryDate DateTime?
+  batchNo    String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([productId, storeId, batchNo])
+}
+
+model StockMovement {
+  id        Int            @id @default(autoincrement())
+  productId Int
+  product   Product        @relation(fields: [productId], references: [id])
+  storeId   Int
+  store     Store          @relation(fields: [storeId], references: [id])
+  type      String         // IN, OUT, ADJUST, TRANSFER_IN, TRANSFER_OUT
+  quantity  Float
+  note      String?
+  userId    Int
+  user      User           @relation(fields: [userId], references: [id])
+  createdAt DateTime       @default(now())
+}
+
+// ─── Suppliers & Purchase Orders ────────────────────────────────
+
+model Supplier {
+  id            Int      @id @default(autoincrement())
+  name          String
+  contactPerson String?
+  phone         String?
+  email         String?
+  address       String?
+  panNo         String?  // Nepal PAN number
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  purchaseOrders PurchaseOrder[]
+}
+
+model PurchaseOrder {
+  id         Int      @id @default(autoincrement())
+  poNumber   String   @unique
+  supplierId Int
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
+  storeId    Int
+  store      Store    @relation(fields: [storeId], references: [id])
+  status     String   @default("PENDING") // PENDING, PARTIAL, RECEIVED, CANCELLED
+  totalAmount Float?
+  notes      String?
+  createdBy  Int
+  creator    User     @relation("purchaseOrderCreator", fields: [createdBy], references: [id])
+  receivedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  items PurchaseOrderItem[]
+}
+
+model PurchaseOrderItem {
+  id              Int           @id @default(autoincrement())
+  purchaseOrderId Int
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  productId       Int
+  product         Product       @relation(fields: [productId], references: [id])
+  qtyOrdered      Float
+  qtyReceived     Float         @default(0)
+  unitPrice       Float
+  total           Float
+}
+
+// ─── Customers & Loyalty ────────────────────────────────────────
+
+model Customer {
+  id          Int      @id @default(autoincrement())
+  name        String?
+  phone       String   @unique
+  email       String?
+  address     String?
+  totalPoints Int      @default(0)
+  storeId     Int?
+  store       Store?   @relation(fields: [storeId], references: [id])
+  registeredAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  transactions Transaction[]
+}
+
+// ─── Transactions (Sales) ───────────────────────────────────────
+
+enum TransactionStatus {
+  COMPLETED
+  REFUNDED
+  VOID
+  HELD
+}
+
+model Transaction {
+  id          Int                @id @default(autoincrement())
+  receiptNo   String             @unique
+  storeId     Int
+  store       Store              @relation(fields: [storeId], references: [id])
+  cashierId   Int
+  cashier     User               @relation("cashier", fields: [cashierId], references: [id])
+  customerId  Int?
+  customer    Customer?          @relation(fields: [customerId], references: [id])
+  subtotal    Float
+  tax         Float
+  discount    Float              @default(0)
+  total       Float
+  status      TransactionStatus  @default(COMPLETED)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  items     TransactionItem[]
+  payments  Payment[]
+}
+
+model TransactionItem {
+  id            Int         @id @default(autoincrement())
+  transactionId Int
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  productId     Int
+  product       Product     @relation(fields: [productId], references: [id])
+  quantity      Float
+  unitPrice     Float
+  discount      Float       @default(0)
+  total         Float
+}
+
+model Payment {
+  id            Int         @id @default(autoincrement())
+  transactionId Int
+  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  type          String      // CASH, CARD, KHALTI, ESEWA, CONNECT_IPS
+  amount        Float
+  reference     String?     // transaction ID from payment gateway
+}
+
+// ─── Shifts ─────────────────────────────────────────────────────
+
+model Shift {
+  id           Int       @id @default(autoincrement())
+  storeId      Int
+  store        Store     @relation(fields: [storeId], references: [id])
+  cashierId    Int
+  cashier      User      @relation(fields: [cashierId], references: [id])
+  startedAt    DateTime
+  endedAt      DateTime?
+  openingFloat Float
+  closingFloat Float?
+  status       String    @default("OPEN") // OPEN, CLOSED
+  note         String?
+}
+
+// ─── Discounts & Promotions ─────────────────────────────────────
+
+model Discount {
+  id          Int       @id @default(autoincrement())
+  name        String
+  type        String    // PERCENTAGE, FIXED, BOGO
+  value       Float
+  minPurchase Float?    @default(0)
+  startDate   DateTime?
+  endDate     DateTime?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+// ─── Expenses ───────────────────────────────────────────────────
+
+model Expense {
+  id          Int      @id @default(autoincrement())
+  storeId     Int
+  store       Store    @relation(fields: [storeId], references: [id])
+  category    String   // UTILITIES, RENT, SALARY, MAINTENANCE, OTHER
+  description String
+  amount      Float
+  date        DateTime
+  userId      Int
+  createdAt   DateTime @default(now())
+}
